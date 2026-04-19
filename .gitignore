@@ -1,0 +1,7 @@
+source/
+venv/
+__pycache__/
+*.pyc
+zimco.db
+*.xlsx
+.env
