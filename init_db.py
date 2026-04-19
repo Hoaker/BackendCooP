@@ -1,7 +1,7 @@
 from database import engine, Base
 import models 
 
-print("Creating database tables...")
-# This tells SQLAlchemy to look at 'Base' and create everything connected to it
+print("Connecting to PostgreSQL and creating tables...")
+# This creates the tables in the cloud
 Base.metadata.create_all(bind=engine)
-print("Done! Your zimco.db file is ready.")
+print("Done! Your cloud database tables are created and ready.")
