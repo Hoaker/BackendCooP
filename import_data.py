@@ -40,57 +40,80 @@ def load_sheet(sheet_name):
         r"total|nan|cooperator", na=True, regex=True
     )]
     return df.reset_index(drop=True)
-
+    
 def import_bursary_data():
-    default_hash = security.get_password_hash("password")
-    print("Password hash ready.")
+    db = SessionLocal()
+    
+    # 1. LOAD THE IDs FROM THE MEMBER LIST FILE
+    print("Reading Member List for IDs...")
+    list_df = pd.read_excel("List of ZIMCO member.xlsx") 
+    
+    # Create a map: {"FULL NAME": "COOP_ID"}
+    # We store the names in uppercase for easier matching
+    name_to_id = {
+        str(row["FULL NAME"]).strip().upper(): str(row["COOP_ID"]).strip()
+        for _, row in list_df.iterrows()
+    }
+    print(f" Found {len(name_to_id)} IDs in the member list.")
 
-    print("Reading all sheets...")
+    # 2. LOAD THE BURSARY DATA
+    print("Reading Bursary sheets...")
     all_data = {}
-    all_names = set()
     for sheet_name, month_label in MONTH_SHEETS.items():
         df = load_sheet(sheet_name)
         all_data[month_label] = df
-        for name in df["COOPERATOR'S FULL NAME"].astype(str).str.strip():
-            if name and name.lower() != "nan":
-                all_names.add(name)
-    print(f"  Found {len(all_names)} unique member names.")
 
-    db = SessionLocal()
-
+    # 3. SYNC MEMBERS TO DATABASE & SET PASSWORDS
     existing = {m.full_name: m for m in db.query(Member).all()}
-    new_members = []
-    for name in all_names:
-        if name not in existing:
-            m = Member(
-                member_id=f"NO_ID_{str(uuid.uuid4())[:6]}",
-                full_name=name,
-                password_hash=default_hash,
+    for full_name, coop_id in name_to_id.items():
+        if full_name not in existing:
+            # First word of the name is the surname/password
+            surname = full_name.split()[0].lower()
+            new_m = Member(
+                member_id=coop_id,
+                full_name=full_name,
+                password_hash=security.get_password_hash(surname)
             )
-            new_members.append(m)
-            existing[name] = m
-
-    if new_members:
-        db.bulk_save_objects(new_members)
-        db.flush()
-        print(f"  Created {len(new_members)} new member records.")
-
+            db.add(new_m)
+    
     db.commit()
-    member_map = {m.full_name: m.member_id
-                  for m in db.query(Member.full_name, Member.member_id).all()}
+    print("Database members synchronized.")
+    
+    # Refresh member map for transaction processing
+    member_map = {m.full_name: m.member_id for m in db.query(Member.full_name, Member.member_id).all()}
 
     annual_totals = {}
     transaction_rows = []
 
+    # 4. PROCESS TRANSACTIONS WITH COMPONENT MATCHING
     for month_label, df in all_data.items():
         print(f"  Processing {month_label} ({len(df)} rows)...")
         for _, row in df.iterrows():
-            name = str(row.get("COOPERATOR'S FULL NAME", "")).strip()
-            mid = member_map.get(name)
+            bursary_name = str(row.get("COOPERATOR'S FULL NAME", "")).strip().upper()
+            if not bursary_name or bursary_name == "NAN":
+                continue
+                
+            # Attempt Fuzzy/Component Match
+            mid = None
+            # First try exact match
+            mid = member_map.get(bursary_name)
+            
+            # If no exact match, try matching based on name components (Surname + First Name)
+            if not mid:
+                bursary_parts = set(bursary_name.split())
+                for list_name, list_id in name_to_id.items():
+                    list_parts = set(list_name.split())
+                    # If at least 2 parts of the name match, we consider it a hit
+                    if len(bursary_parts.intersection(list_parts)) >= 2:
+                        mid = list_id
+                        break
+            
             if not mid:
                 continue
+
             if mid not in annual_totals:
                 annual_totals[mid] = {col: 0.0 for col in ACCOUNT_COLUMN_MAP.values()}
+            
             for excel_col, db_col in ACCOUNT_COLUMN_MAP.items():
                 amount = safe_float(row.get(excel_col, 0))
                 if amount <= 0:
@@ -111,6 +134,7 @@ def import_bursary_data():
             AnnualRecord.fiscal_year == FISCAL_YEAR
         ).all()
     }
+    
     new_records = []
     for mid, totals in annual_totals.items():
         if mid in existing_records:
@@ -121,6 +145,7 @@ def import_bursary_data():
             new_records.append(AnnualRecord(
                 member_id=mid, fiscal_year=FISCAL_YEAR, **totals
             ))
+            
     if new_records:
         db.bulk_save_objects(new_records)
     db.flush()
@@ -132,11 +157,11 @@ def import_bursary_data():
     db.commit()
     db.close()
     print(f"\n=== Import Complete ===")
-    print(f"  Members        : {len(member_map)}")
-    print(f"  Annual records : {len(annual_totals)}")
-    print(f"  Transactions   : {len(transaction_rows)}")
+    print(f"  Members Summary : {len(name_to_id)} identified from files.")
+    print(f"  Annual Records  : {len(annual_totals)} members updated.")
+    print(f"  Transactions    : {len(transaction_rows)} records saved.")
 
 if __name__ == "__main__":
-    print("Starting ZIMCO Bursary 2026 Import (Jan - Mar, April excluded) ...")
+    print("Starting ZIMCO Bursary 2026 Import...")
     import_bursary_data()
-    print("Done!")
+    print("Done!")
