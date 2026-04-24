@@ -1,7 +1,6 @@
 annotated-doc
 annotated-types
 anyio
-bcrypt
 cffi
 click
 et_xmlfile
@@ -12,7 +11,6 @@ idna
 numpy
 openpyxl
 pandas
-passlib
 psycopg2-binary
 pycparser
 pydantic
@@ -25,3 +23,5 @@ starlette
 typing-inspection
 typing_extensions
 uvicorn
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
